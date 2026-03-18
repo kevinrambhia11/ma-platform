@@ -2564,70 +2564,41 @@ async function callClaudeAPI(systemPrompt, userPrompt, maxTokens=16000){
 
   const isOpenRouter=key.startsWith("sk-or-");
 
-  // OpenRouter: direct browser call — tries free models in order until one works
+  // OpenRouter: direct browser call — uses openrouter/free which auto-selects
+  // whichever free model is currently available (no hardcoded model list to go stale)
   if(isOpenRouter){
     const freeMaxTokens=Math.min(maxTokens,8000);
-    // Free models in priority order — if one is rate-limited, tries the next
-    const freeModels=[
-      "meta-llama/llama-3.3-70b-instruct:free",
-      "google/gemma-3-27b-it:free",
-      "microsoft/phi-4-reasoning-plus:free",
-      "deepseek/deepseek-r1-0528-qwen3-8b:free",
-      "mistralai/mistral-7b-instruct:free",
-    ];
-
-    let lastError="";
-    for(const model of freeModels){
-      try{
-        const resp=await fetch("https://openrouter.ai/api/v1/chat/completions",{
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "Authorization":`Bearer ${key}`,
-            "HTTP-Referer":window.location.href,
-            "X-Title":"M&A Legal Intelligence Platform"
-          },
-          body:JSON.stringify({
-            model,
-            max_tokens:freeMaxTokens,
-            messages:[
-              {role:"system",content:systemPrompt},
-              {role:"user",content:userPrompt}
-            ]
-          })
-        });
-        if(!resp.ok){
-          const e=await resp.text().catch(()=>"");
-          let msg=`OpenRouter ${resp.status}`;
-          try{const j=JSON.parse(e);msg=j.error?.message||msg;}catch(_){}
-          // 429 = rate limited, 5xx = provider error — try next model
-          if(resp.status===429||resp.status>=500||msg.includes("Provider returned error")||msg.includes("rate")){
-            lastError=`${model}: ${msg}`;
-            log(`Model ${model} unavailable, trying next…`);
-            await new Promise(r=>setTimeout(r,800)); // brief pause before retry
-            continue;
-          }
-          throw new Error(msg);
+    const resp=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":`Bearer ${key}`,
+        "HTTP-Referer":window.location.href,
+        "X-Title":"M&A Legal Intelligence Platform"
+      },
+      body:JSON.stringify({
+        model:"openrouter/auto",
+        max_tokens:freeMaxTokens,
+        messages:[
+          {role:"system",content:systemPrompt},
+          {role:"user",content:userPrompt}
+        ],
+        // Prefer free models
+        provider:{
+          allow_fallbacks:true,
+          require_parameters:true
         }
-        const data=await resp.json();
-        const text=data.choices?.[0]?.message?.content||"";
-        if(!text&&data.error){
-          lastError=`${model}: ${data.error.message||"empty response"}`;
-          log(`Model ${model} returned error, trying next…`);
-          continue;
-        }
-        return text;
-      }catch(err){
-        if(err.message.includes("fetch")||err.message.includes("network")){
-          throw err; // network error — don't retry
-        }
-        lastError=`${model}: ${err.message}`;
-        log(`Model ${model} failed: ${err.message}, trying next…`);
-        await new Promise(r=>setTimeout(r,800));
-        continue;
-      }
+      })
+    });
+    if(!resp.ok){
+      const e=await resp.text().catch(()=>"");
+      let msg=`OpenRouter error ${resp.status}`;
+      try{const j=JSON.parse(e);msg=j.error?.message||msg;}catch(_){}
+      throw new Error(msg);
     }
-    throw new Error(`All free models unavailable. Last error: ${lastError}. Try again in a moment or add OpenRouter credits.`);
+    const data=await resp.json();
+    if(data.error) throw new Error(data.error.message||"OpenRouter error");
+    return data.choices?.[0]?.message?.content||"";
   }
 
   // Anthropic key: route through Cloudflare Worker to avoid CORS
