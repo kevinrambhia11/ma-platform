@@ -394,10 +394,10 @@ h1 em{font-style:italic;color:var(--accent)}
     <button id="apiKeySaveBtn" class="btn btn-neutral" type="button" style="padding:7px 12px;font-size:11px;white-space:nowrap;">Save</button>
   </div>
   <div style="font-size:10px;color:var(--muted);margin-top:5px;line-height:1.6;">
-    <strong>Free option:</strong> Get a free key at <span style="font-family:'IBM Plex Mono',monospace;">openrouter.ai</span> (keys start with <span style="font-family:'IBM Plex Mono',monospace;">sk-or-</span>)<br>
-    <strong>Paid:</strong> Anthropic keys start with <span style="font-family:'IBM Plex Mono',monospace;">sk-ant-</span> — requires credits at <span style="font-family:'IBM Plex Mono',monospace;">console.anthropic.com</span><br>
-    OpenRouter keys work directly. Anthropic keys route via Cloudflare Worker. Key stays in memory only — never saved to disk.
-  </div>
+  <div style="font-size:10px;color:var(--muted);margin-top:5px;line-height:1.6;">
+    <strong>Free:</strong> Get a free key at <span style="font-family:'IBM Plex Mono',monospace;">openrouter.ai</span> (keys start with sk-or-) — uses Llama 3.3 70B, completely free, no credits needed<br>
+    <strong>Paid (better quality):</strong> Anthropic keys start with sk-ant- — requires credits at console.anthropic.com<br>
+    Key stays in memory only — never saved to disk.
 </div>
 <div class="doc"><div class="n">Storage Mode</div><div id="fsSupport" class="chip pending">Checking browser support...</div><div id="selectedProject" class="m">No root folder selected</div></div>
 <form id="projectForm" class="form-grid">
@@ -2567,7 +2567,7 @@ function recheckProxyStatus(){
 // ── Cloudflare Worker URL ─────────────────────────────────────────────
 // Deploy your own worker (see cloudflare_worker.js) and paste the URL here.
 // Format: https://your-worker-name.your-subdomain.workers.dev
-const WORKER_URL = "https://ma-proxy1.kevin-rambhia.workers.dev";
+const WORKER_URL = "https://ma-proxy.your-subdomain.workers.dev";
 
 async function callClaudeAPI(systemPrompt, userPrompt, maxTokens=16000){
   const key=getApiKey();
@@ -2577,6 +2577,9 @@ async function callClaudeAPI(systemPrompt, userPrompt, maxTokens=16000){
 
   // OpenRouter: direct browser call (no CORS restriction)
   if(isOpenRouter){
+    // Use free model — no credits needed
+    // Reduce tokens to 8000 to stay within free model limits
+    const freeMaxTokens=Math.min(maxTokens,8000);
     const resp=await fetch("https://openrouter.ai/api/v1/chat/completions",{
       method:"POST",
       headers:{
@@ -2586,8 +2589,8 @@ async function callClaudeAPI(systemPrompt, userPrompt, maxTokens=16000){
         "X-Title":"M&A Legal Intelligence Platform"
       },
       body:JSON.stringify({
-        model:"anthropic/claude-sonnet-4-5",
-        max_tokens:maxTokens,
+        model:"meta-llama/llama-3.3-70b-instruct:free",
+        max_tokens:freeMaxTokens,
         messages:[
           {role:"system",content:systemPrompt},
           {role:"user",content:userPrompt}
