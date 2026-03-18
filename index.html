@@ -1691,33 +1691,22 @@ window.extractPdfText=extractPdfText;
 async function extractTermsheetWithAI(text, codename){
   if(!getApiKey()) return null;
   try{
-    const system=`You are an M&A lawyer extracting deal metadata from a term sheet or LOI. Return ONLY a valid JSON object — no markdown, no explanation.`;
-    const user=`Extract the following fields from this term sheet. Return ONLY a JSON object with exactly these keys. If a field is not found, use null.
+    const system=`You extract deal information from M&A term sheets. Always respond with ONLY a JSON object, nothing else. No markdown, no explanation, no backticks.`;
+    const user=`Read this term sheet and extract the deal fields. Return ONLY this exact JSON structure with values filled in (use null if not found):
+{"buyer":"acquiring company full name","target":"target company full name","deal_type":"Merger or Share Purchase or Asset Purchase","jurisdiction":"governing law state/country","purchase_price":"price per share or total value","enterprise_value":"total deal value if stated","signing_date":"expected signing date","counsel":"target company legal counsel name"}
 
-{
-  "buyer": "Full legal name of the acquiring company",
-  "target": "Full legal name of the target company",
-  "deal_type": "One of: Merger, Share Purchase, Asset Purchase",
-  "jurisdiction": "Governing law / jurisdiction (e.g. Delaware, US)",
-  "purchase_price": "Price per share or total consideration (exact text from document)",
-  "enterprise_value": "Enterprise value or total deal value if stated",
-  "signing_date": "Target signing or announcement date",
-  "counsel": "Name of target/seller's legal counsel"
-}
+TERM SHEET:
+${text.slice(0,6000)}`;
 
-TERM SHEET TEXT:
-${text.slice(0,8000)}`;
-
-    const raw=await callClaudeAPI(system,user,500);
-    const clean=raw.replace(/```json|```/g,"").trim();
-    const start=clean.indexOf("{");
-    const end=clean.lastIndexOf("}");
-    if(start===-1||end===-1) return null;
-    const parsed=JSON.parse(clean.slice(start,end+1));
+    const raw=await callClaudeAPI(system,user,600);
+    // Be very permissive in finding JSON — free models sometimes add text around it
+    const jsonMatch=raw.match(/\{[\s\S]*\}/);
+    if(!jsonMatch) return null;
+    const parsed=JSON.parse(jsonMatch[0]);
     log("AI term sheet extraction complete.");
     return parsed;
   }catch(err){
-    log(`AI extraction fallback failed: ${err.message}`);
+    log(`AI extraction error: ${err.message}`);
     return null;
   }
 }
