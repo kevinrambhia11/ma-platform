@@ -3870,10 +3870,73 @@ async function generateCheckerOutput(i){
  * Each section gets its own 16,000-token call.
  * Sections are concatenated with --- separators into one document.
  */
+// ── Strip JSON/code blocks from AI output and convert to readable prose ──
+function cleanAiOutput(text){
+  if(!text) return text;
+  // If output is wrapped in ```json ... ``` or ``` ... ```, extract and convert
+  const fenced=text.match(/```(?:json)?\s*([\s\S]+?)```/);
+  if(fenced){
+    try{
+      const parsed=JSON.parse(fenced[1].trim());
+      return jsonToMarkdown(parsed);
+    }catch(_){ return text.replace(/```(?:json)?/g,"").replace(/```/g,"").trim(); }
+  }
+  // If entire output looks like raw JSON (starts with [ or {), convert it
+  const trimmed=text.trim();
+  if((trimmed.startsWith("[")&&trimmed.endsWith("]"))||(trimmed.startsWith("{")&&trimmed.endsWith("}"))){
+    try{
+      const parsed=JSON.parse(trimmed);
+      return jsonToMarkdown(parsed);
+    }catch(_){ return text; }
+  }
+  return text;
+}
+
+// Convert a JSON object/array into human-readable markdown
+function jsonToMarkdown(obj, depth=0){
+  if(obj===null||obj===undefined) return "N/A";
+  if(typeof obj==="string") return obj;
+  if(typeof obj==="number"||typeof obj==="boolean") return String(obj);
+  const indent=depth>0?"  ".repeat(depth):"";
+  if(Array.isArray(obj)){
+    if(!obj.length) return "None";
+    // Array of objects → markdown table if all items have same keys
+    if(obj.length>0&&typeof obj[0]==="object"&&!Array.isArray(obj[0])){
+      const keys=Object.keys(obj[0]);
+      if(keys.length>1&&keys.length<=8){
+        const header="| "+keys.map(k=>k.replace(/_/g," ")).join(" | ")+" |";
+        const sep="| "+keys.map(()=>"---").join(" | ")+" |";
+        const rows=obj.map(row=>"| "+keys.map(k=>{
+          const v=row[k];
+          return (v===null||v===undefined)?"—":Array.isArray(v)?v.join(", "):String(v);
+        }).join(" | ")+" |");
+        return [header,sep,...rows].join("\n");
+      }
+    }
+    return obj.map((item,i)=>{
+      if(typeof item==="object") return `${indent}${i+1}. ${jsonToMarkdown(item,depth+1)}`;
+      return `${indent}- ${item}`;
+    }).join("\n");
+  }
+  if(typeof obj==="object"){
+    return Object.entries(obj).map(([k,v])=>{
+      const label=k.replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+      if(v===null||v===undefined) return `**${label}:** N/A`;
+      if(typeof v==="string"||typeof v==="number"||typeof v==="boolean") return `**${label}:** ${v}`;
+      if(Array.isArray(v)&&v.every(i=>typeof i==="string")) return `**${label}:** ${v.join(", ")}`;
+      return `**${label}:**\n${jsonToMarkdown(v,depth+1)}`;
+    }).join("\n\n");
+  }
+  return String(obj);
+}
+
 async function generateDocument(cfg){
   const {docIndex,title,filename,header,system,sections,onComplete}=cfg;
   const total=sections.length;
   const sectionTexts=[];
+
+  // Global enforcement: append no-JSON rule to every system prompt
+  const enforced=system+"\n\nCRITICAL FORMAT RULES:\n- Write in clear professional prose and markdown only\n- Use markdown tables for structured data (| Col | Col |)\n- Use ## headings, bullet points, and bold text for structure\n- NEVER output JSON, code blocks, or raw data structures\n- Every section must be human-readable as a standalone document";
 
   for(let i=0;i<total;i++){
     const sec=sections[i];
@@ -3883,13 +3946,13 @@ async function generateDocument(cfg){
     setAiDocGenerating(progressLabel);
     log(progressLabel);
     try{
-      const text=await callClaudeAPI(system, sec.prompt, 16000);
-      sectionTexts.push(text.trim());
+      const raw=await callClaudeAPI(enforced, sec.prompt, 16000);
+      // Clean any JSON that slipped through
+      sectionTexts.push(cleanAiOutput(raw.trim()));
     }catch(err){
       log(`Section "${sec.label}" error: ${err.message}`);
       sectionTexts.push(`[Section: ${sec.label} — generation failed: ${err.message}]`);
     }
-    // Brief pause between calls to avoid rate limiting
     if(i<total-1) await new Promise(r=>setTimeout(r,350));
   }
 
@@ -3940,15 +4003,17 @@ async function genStep1_DDRequest(ctx,m){
 async function genStep2_Ingest(ctx,m){
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
   const slug=toSlug(m.codename||"deal");
-  const system=`You are a senior M&A lawyer extracting and structuring data room documents. Be thorough, precise, and deal-specific. Use tables wherever possible. Output ONLY the document content — no preamble.`;
+  const system=`You are a senior M&A lawyer extracting and structuring data room documents. Write in clear professional prose and markdown only. Use markdown tables for all structured data. Use ## headings and bullet points. NEVER output JSON, code blocks, or raw data structures. Every section must be human-readable as a professional legal document.`;
 
   // ── Document 1: Target Cap Table ────────────────────────────────────
   setAiDocGenerating("Step 3 — Generating Target Cap Table (1/4)…");
   log("Step 3 (1/4): Generating Target Cap Table…");
-  const capTableText=await callClaudeAPI(system,
-    `Extract and structure the CAPITALISATION TABLE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Target Cap Table document containing:\n1. SHARE CAPITAL STRUCTURE: table of all share classes — Class | Authorised | Issued | Par Value | Rights\n2. SHAREHOLDER REGISTER: table of all shareholders — Shareholder | Share Class | Shares Held | % Ownership (undiluted) | % Ownership (fully diluted)\n3. OPTION & WARRANT SCHEDULE: all outstanding options/warrants — Holder | Grant Date | Vesting Schedule | Strike Price | Shares | Status\n4. CONVERTIBLE INSTRUMENTS: any convertible notes, SAFEs, or other instruments — Holder | Principal | Conversion Terms | Dilutive Impact\n5. FULLY-DILUTED CAPITALISATION TABLE: complete table showing ownership on a fully-diluted basis\n6. KEY OBSERVATIONS: any unusual cap table features, drag-along/tag-along rights, pre-emption rights, or consent requirements\n\nBase all figures directly on the uploaded documents.`,
+  const capTableText=cleanAiOutput(await callClaudeAPI(system,
+    `Write in clear professional prose and markdown. Use markdown tables. NO JSON, NO code blocks.
+
+Extract and structure the CAPITALISATION TABLE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Target Cap Table document containing:\n1. SHARE CAPITAL STRUCTURE: table of all share classes — Class | Authorised | Issued | Par Value | Rights\n2. SHAREHOLDER REGISTER: table of all shareholders — Shareholder | Share Class | Shares Held | % Ownership (undiluted) | % Ownership (fully diluted)\n3. OPTION & WARRANT SCHEDULE: all outstanding options/warrants — Holder | Grant Date | Vesting Schedule | Strike Price | Shares | Status\n4. CONVERTIBLE INSTRUMENTS: any convertible notes, SAFEs, or other instruments — Holder | Principal | Conversion Terms | Dilutive Impact\n5. FULLY-DILUTED CAPITALISATION TABLE: complete table showing ownership on a fully-diluted basis\n6. KEY OBSERVATIONS: any unusual cap table features, drag-along/tag-along rights, pre-emption rights, or consent requirements\n\nBase all figures directly on the uploaded documents.`,
     8000
-  ).catch(err=>`[Cap Table generation failed: ${err.message}]`);
+  ).catch(err=>`[Cap Table generation failed: ${err.message}]`));
 
   const capTableFull=`# Target Cap Table\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${capTableText}`;
   await autoDownloadDoc(capTableFull,`cap_table_${slug}`,"Target Cap Table");
@@ -3959,10 +4024,12 @@ async function genStep2_Ingest(ctx,m){
   // ── Document 2: Material Contracts Summary ───────────────────────────
   setAiDocGenerating("Step 3 — Generating Material Contracts Summary (2/4)…");
   log("Step 3 (2/4): Generating Material Contracts Summary…");
-  const contractsText=await callClaudeAPI(system,
-    `Extract and structure the MATERIAL CONTRACTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Material Contracts Summary containing:\n1. CONTRACTS SUMMARY TABLE: for each contract — Contract Name | Counterparty | Type | Effective Date | Expiry | Value/Revenue | Renewal | Change of Control Clause (Y/N) | Consent Required (Y/N) | Termination Rights\n2. CHANGE OF CONTROL ANALYSIS: for each contract with a change of control clause — exact clause text/summary, trigger conditions, consequences (termination right / consent / deemed assignment), recommended action\n3. CONSENT REQUIREMENTS MATRIX: all contracts requiring third-party consent to proceed — Contract | Consent Party | Consent Type | Timing | Priority\n4. TERMINATION RISK REGISTER: contracts with termination rights that could be triggered — Contract | Trigger | Risk Level | Mitigation\n5. KEY COMMERCIAL OBSERVATIONS: top 5 commercial risks or opportunities from the contract review\n\nBase all analysis directly on the uploaded documents.`,
+  const contractsText=cleanAiOutput(await callClaudeAPI(system,
+    `Write in clear professional prose and markdown. Use markdown tables. NO JSON, NO code blocks.
+
+Extract and structure the MATERIAL CONTRACTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Material Contracts Summary containing:\n1. CONTRACTS SUMMARY TABLE: for each contract — Contract Name | Counterparty | Type | Effective Date | Expiry | Value/Revenue | Renewal | Change of Control Clause (Y/N) | Consent Required (Y/N) | Termination Rights\n2. CHANGE OF CONTROL ANALYSIS: for each contract with a change of control clause — exact clause text/summary, trigger conditions, consequences (termination right / consent / deemed assignment), recommended action\n3. CONSENT REQUIREMENTS MATRIX: all contracts requiring third-party consent to proceed — Contract | Consent Party | Consent Type | Timing | Priority\n4. TERMINATION RISK REGISTER: contracts with termination rights that could be triggered — Contract | Trigger | Risk Level | Mitigation\n5. KEY COMMERCIAL OBSERVATIONS: top 5 commercial risks or opportunities from the contract review\n\nBase all analysis directly on the uploaded documents.`,
     8000
-  ).catch(err=>`[Material Contracts generation failed: ${err.message}]`);
+  ).catch(err=>`[Material Contracts generation failed: ${err.message}]`));
 
   const contractsFull=`# Material Contracts Summary\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${contractsText}`;
   await autoDownloadDoc(contractsFull,`material_contracts_${slug}`,"Material Contracts Summary");
@@ -3973,10 +4040,12 @@ async function genStep2_Ingest(ctx,m){
   // ── Document 3: IP Schedule ──────────────────────────────────────────
   setAiDocGenerating("Step 3 — Generating IP Schedule (3/4)…");
   log("Step 3 (3/4): Generating IP Schedule…");
-  const ipText=await callClaudeAPI(system,
-    `Extract and structure the INTELLECTUAL PROPERTY SCHEDULE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured IP Schedule containing:\n1. OWNED IP REGISTER: all IP owned by the target — IP Type | Description | Registration # | Jurisdiction | Status | Expiry | Owner of Record\n2. LICENSED-IN IP: IP licensed to the target — Licensor | IP Description | Licence Type | Scope | Duration | Royalty | Exclusivity | Termination Rights\n3. LICENSED-OUT IP: IP licensed by the target to third parties — Licensee | IP Description | Scope | Revenue | Exclusivity\n4. SOFTWARE & TECHNOLOGY: key software systems, proprietary technology, and open source components\n5. DOMAIN NAMES & TRADE MARKS: key brands, domain names, and registered marks\n6. IP RISK ASSESSMENT: any ownership disputes, encumbrances, expiring registrations, or open source licence compliance issues\n7. KEY OBSERVATIONS: IP gaps or risks relevant to the transaction\n\nBase all analysis on the uploaded documents. If limited IP information was provided, note the gaps.`,
+  const ipText=cleanAiOutput(await callClaudeAPI(system,
+    `Write in clear professional prose and markdown. Use markdown tables. NO JSON, NO code blocks.
+
+Extract and structure the INTELLECTUAL PROPERTY SCHEDULE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured IP Schedule containing:\n1. OWNED IP REGISTER: all IP owned by the target — IP Type | Description | Registration # | Jurisdiction | Status | Expiry | Owner of Record\n2. LICENSED-IN IP: IP licensed to the target — Licensor | IP Description | Licence Type | Scope | Duration | Royalty | Exclusivity | Termination Rights\n3. LICENSED-OUT IP: IP licensed by the target to third parties — Licensee | IP Description | Scope | Revenue | Exclusivity\n4. SOFTWARE & TECHNOLOGY: key software systems, proprietary technology, and open source components\n5. DOMAIN NAMES & TRADE MARKS: key brands, domain names, and registered marks\n6. IP RISK ASSESSMENT: any ownership disputes, encumbrances, expiring registrations, or open source licence compliance issues\n7. KEY OBSERVATIONS: IP gaps or risks relevant to the transaction\n\nBase all analysis on the uploaded documents. If limited IP information was provided, note the gaps.`,
     8000
-  ).catch(err=>`[IP Schedule generation failed: ${err.message}]`);
+  ).catch(err=>`[IP Schedule generation failed: ${err.message}]`));
 
   const ipFull=`# IP Schedule\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${ipText}`;
   await autoDownloadDoc(ipFull,`ip_schedule_${slug}`,"IP Schedule");
@@ -3987,10 +4056,12 @@ async function genStep2_Ingest(ctx,m){
   // ── Document 4: Employment Agreements Summary ────────────────────────
   setAiDocGenerating("Step 3 — Generating Employment Agreements Summary (4/4)…");
   log("Step 3 (4/4): Generating Employment Agreements Summary…");
-  const employmentText=await callClaudeAPI(system,
-    `Extract and structure the EMPLOYMENT AGREEMENTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Employment Agreements Summary containing:\n1. KEY PERSONNEL SUMMARY TABLE: for each employment agreement — Employee | Role | Start Date | Notice Period (employee) | Notice Period (employer) | Base Salary | Bonus | Equity/Options | Garden Leave\n2. CHANGE OF CONTROL PROVISIONS: for each employee — Cash Payment on CoC | Acceleration of Equity | Good Reason Triggers | Effective Date | Estimated CoC Payment Value\n3. NON-COMPETE & NON-SOLICIT SUMMARY: — Employee | Non-Compete Duration | Non-Compete Geography | Non-Solicit Duration | Enforceability Assessment\n4. IP ASSIGNMENT & CONFIDENTIALITY: any unusual IP assignment terms or gaps in confidentiality coverage\n5. RETENTION RISK ASSESSMENT: key personnel at risk of departure post-transaction, with recommended retention approach\n6. TOTAL CHANGE OF CONTROL COST ESTIMATE: aggregate estimated cost of all change of control payments\n\nBase all analysis directly on the uploaded employment agreement documents.`,
+  const employmentText=cleanAiOutput(await callClaudeAPI(system,
+    `Write in clear professional prose and markdown. Use markdown tables. NO JSON, NO code blocks.
+
+Extract and structure the EMPLOYMENT AGREEMENTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Employment Agreements Summary containing:\n1. KEY PERSONNEL SUMMARY TABLE: for each employment agreement — Employee | Role | Start Date | Notice Period (employee) | Notice Period (employer) | Base Salary | Bonus | Equity/Options | Garden Leave\n2. CHANGE OF CONTROL PROVISIONS: for each employee — Cash Payment on CoC | Acceleration of Equity | Good Reason Triggers | Effective Date | Estimated CoC Payment Value\n3. NON-COMPETE & NON-SOLICIT SUMMARY: — Employee | Non-Compete Duration | Non-Compete Geography | Non-Solicit Duration | Enforceability Assessment\n4. IP ASSIGNMENT & CONFIDENTIALITY: any unusual IP assignment terms or gaps in confidentiality coverage\n5. RETENTION RISK ASSESSMENT: key personnel at risk of departure post-transaction, with recommended retention approach\n6. TOTAL CHANGE OF CONTROL COST ESTIMATE: aggregate estimated cost of all change of control payments\n\nBase all analysis directly on the uploaded employment agreement documents.`,
     8000
-  ).catch(err=>`[Employment Agreements generation failed: ${err.message}]`);
+  ).catch(err=>`[Employment Agreements generation failed: ${err.message}]`));
 
   const employmentFull=`# Employment Agreements Summary\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${employmentText}`;
   await autoDownloadDoc(employmentFull,`employment_agreements_${slug}`,"Employment Agreements Summary");
