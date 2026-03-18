@@ -356,11 +356,11 @@ h1 em{font-style:italic;color:var(--accent)}
   </div>
 </div>
 <section class="toolbar">
-<button id="runAll" class="btn btn-main">Run Until Human Gate</button>
-<button id="runNext" class="btn btn-neutral">Run Next Step</button>
-<button id="humanResume" class="btn btn-human">Complete Human Gate</button>
+<button id="runAll" class="btn btn-main" title="Runs AI steps automatically one after another until a Human Gate is reached. Stops if a required upload is missing.">Run Until Human Gate</button>
+<button id="runNext" class="btn btn-neutral" title="Runs only the next single step. Use this to manually control step-by-step execution.">Run Next Step</button>
+<button id="humanResume" class="btn btn-human" title="Marks the current Human Gate as complete and moves to the next step. Upload the required gate document first.">Complete Human Gate</button>
 
-<button id="reset" class="btn btn-neutral">Reset</button>
+<button id="reset" class="btn btn-neutral" title="⚠ Resets the entire workflow — all progress, uploads, and generated documents will be lost.">Reset</button>
 <div class="state"><span id="dot" class="dot"></span><span id="orchestrator">IDLE</span></div>
 </section>
 <div id="flowTransition" class="flow-transition" style="margin:0 16px;flex-shrink:0;"></div>
@@ -443,6 +443,7 @@ h1 em{font-style:italic;color:var(--accent)}
     <button id="uploadBtn" class="btn btn-main" type="button" style="flex:1;">Save to Project Folder</button>
   </div>
   <div id="uploadBtnNote" style="font-size:10px;color:var(--muted);margin-top:4px;line-height:1.5;">Saves files from this step to your selected root folder — requires a project folder to be created first.</div>
+
 </section>
 
 <div class="doc ops-card"><div class="extract-header"><span class="n">Last Operation</span><span id="opsStatus" class="extract-status ops-idle">Idle</span></div><div id="opsResult" class="extract-body"><span class="extract-empty">No operations yet.</span></div></div>
@@ -1185,7 +1186,7 @@ const STEP_DOCS={
 // ── Per-step upload configuration — what the user should upload at each step ──
 const STEP_UPLOAD_CONFIG=[
   {label:"LOI / Term Sheet",desc:"Upload the Letter of Intent or Term Sheet that initiated this engagement",accept:".docx,.pdf,.txt,.md",required:true},
-  {label:"Additional Deal Documents",desc:"Upload any supplementary deal materials (NDA, bid letters, process letter)",accept:".docx,.pdf,.txt,.md",required:false},
+  {label:"LOI & Supporting Deal Documents",desc:"Upload the signed Letter of Intent, NDA, bid letters, or process letter. These give the AI the deal context needed to generate a targeted DD Request List.",accept:".docx,.pdf,.txt,.md",required:false},
   {label:"All Data Room Documents",desc:"Upload ALL data room documents — cap table, corporate docs, material contracts, financial statements",accept:".docx,.pdf,.xlsx,.csv,.txt,.md",required:true},
   {label:"Material Contracts & Employment Agreements",desc:"Upload key commercial contracts and employment agreements for clause-level review",accept:".docx,.pdf,.txt,.md",required:true},
   {label:"Additional Documents (Optional)",desc:"Upload any documents received since Step 3 — the AI will compare against the DD checklist",accept:".docx,.pdf,.txt,.md",required:false},
@@ -1267,10 +1268,10 @@ function renderSteps(){el.steps.innerHTML="";st.rows.forEach((row,idx)=>{
   left.className="cell";
   const advisoryHtml=advisoryMiss.length?`<div class="chip advisory" style="font-size:11px;margin-top:2px;">⚠ Uploads recommended: ${advisoryMiss.join(", ")}</div>`:"";
   const spinnerHtml=isAiRunningHere?`<div class="step-ai-spinner"><div class="spin"></div>AI generating output…</div>`:"";
-  left.innerHTML=`<div class="title"><strong>${idx+1}. ${row.step}</strong><span class="chip ${row.human?"human":"ai"}">${row.human?"human gate":"ai-led"}</span></div><div class="agent">${row.maker}</div><div class="meta">${chipStatus(row)}</div>${spinnerHtml}<div class="meta"><button class="tiny${isAiRunningHere?" workflow-locked":""}" data-action="maker" data-id="${idx}" ${isAiRunningHere?"disabled":""}>run maker</button></div><div class="agent">Required docs: ${row.required.length?row.required.map(docName).join(", "):"none"}</div>${miss.length?`<div class="chip rej" style="font-size:11px;">Blocked: ${miss.map(docName).join(", ")}</div>`:""}${advisoryHtml}`;
+  left.innerHTML=`<div class="title"><strong>${idx+1}. ${row.step}</strong><span class="chip ${row.human?"human":"ai"}">${row.human?"human gate":"ai-led"}</span></div><div class="agent">${row.maker}</div><div class="meta">${chipStatus(row)}</div>${spinnerHtml}<div class="meta"><button class="tiny${isAiRunningHere?" workflow-locked":""}" data-action="maker" data-id="${idx}" ${isAiRunningHere?"disabled":""} title="Trigger the AI to generate the output document for this step. Upload required documents first.">run maker</button></div><div class="agent">Required docs: ${row.required.length?row.required.map(docName).join(", "):"none"}</div>${miss.length?`<div class="chip rej" style="font-size:11px;">Blocked: ${miss.map(docName).join(", ")}</div>`:""}${advisoryHtml}`;
   const right=document.createElement("div");
   right.className="cell";
-  right.innerHTML=`<div class="title"><strong>${row.human?"Human decision":row.checker}</strong></div><div class="agent">Capturing: ${row.capture.join(", ")}</div><div class="meta">${row.human?`<button class="tiny human" data-action="human" data-id="${idx}" ${isAiRunningHere?"disabled":""}>complete human gate</button>`:`<button class="tiny approve" data-action="approve" data-id="${idx}" ${isAiRunningHere?"disabled":""}>approve</button>`}</div><div class="agent">Maker output: ${row.makerOut.map(docName).join(", ")}</div><div class="agent">Checker output: ${row.checkerOut.map(docName).join(", ")}</div>`;
+  right.innerHTML=`<div class="title"><strong>${row.human?"Human decision":row.checker}</strong></div><div class="agent">Capturing: ${row.capture.join(", ")}</div><div class="meta">${row.human?`<button class="tiny human" data-action="human" data-id="${idx}" ${isAiRunningHere?"disabled":""} title="Complete this Human Gate. Upload the required document first, then click to proceed.">complete human gate</button>`:`<button class="tiny approve" data-action="approve" data-id="${idx}" ${isAiRunningHere?"disabled":""} title="Approve this step's output and move to the next step. If the next step has uploads ready, it will auto-run.">approve</button>`}</div><div class="agent">Maker output: ${row.makerOut.map(docName).join(", ")}</div><div class="agent">Checker output: ${row.checkerOut.map(docName).join(", ")}</div>`;
   wrap.appendChild(left);wrap.appendChild(right);el.steps.appendChild(wrap);
 })}function renderMetrics(){
   const completed=st.rows.filter(r=>r.status==="approved").length;
@@ -1609,10 +1610,14 @@ async function runUntilHuman(){
       break;
     }
 
-    // Auto-approve AI steps after generation completes
-    if(row.status!=="approved"&&row.makerDone){
-      approve(st.cursor);
-      await sleep(200);
+    // Stop after each AI generation — user must review and click Approve
+    if(row.makerDone&&row.status!=="approved"){
+      log(`✓ Step ${st.cursor+1} output ready — review the downloaded document, then click Approve to continue.`);
+      opOut({ok:true,action:"step-output-ready",step:st.cursor+1,
+        message:`Step ${st.cursor+1} output generated. Review the downloaded .docx, then click Approve to continue.`});
+      st.running=false;
+      render();
+      return;
     }
 
     await sleep(100);
@@ -2481,7 +2486,24 @@ bindEvent(el.runAll,"click",async()=>{try{await runUntilHuman();}catch(err){opOu
 bindEvent(el.runNext,"click",async()=>{try{await runNext();}catch(err){opOut(`Run Next Step failed: ${err.message}`);log(`Run Next Step failed: ${err.message}`);st.running=false;render();}});
 bindEvent(el.humanResume,"click",async()=>{const i=st.rows.findIndex(r=>r.status==="awaiting_human");if(i===-1){log("No active human gate.");render();return;}completeHuman(i);await runUntilHuman();render();});
 bindEvent(el.injectReject,"click",()=>{st.forcedReject=true;log("Next AI checker will reject and trigger loopback.");render()});
-bindEvent(el.reset,"click",reset);
+window.addEventListener("beforeunload",(e)=>{
+  const hasWork=Object.keys(st.generatedDocs).length>0||st.rows.some(r=>r.status==="approved");
+  if(hasWork){
+    e.preventDefault();
+    e.returnValue="You have generated documents and approved steps. Refreshing will clear all in-memory data. Downloaded .docx files are safe.";
+    return e.returnValue;
+  }
+});
+
+bindEvent(el.reset,"click",()=>{
+  const completed=st.rows.filter(r=>r.status==="approved").length;
+  const hasWork=completed>0||Object.keys(st.generatedDocs).length>0||Object.keys(st.stepUploads).length>0;
+  if(hasWork){
+    const msg=`Reset the entire workflow?\n\n• ${completed} completed steps will be cleared\n• All generated documents will be removed from memory\n• All uploaded file references will be cleared\n\nDownloaded .docx files on your computer are NOT affected.\n\nThis cannot be undone.`;
+    if(!window.confirm(msg)) return;
+  }
+  reset();
+});
 
 bindEvent(el.selectFolderBtn,"click",async()=>{try{await selectProjectFolder();}catch(err){opOut(err.message)}});
 bindEvent(el.initProjectBtn,"click",async()=>{try{await initializeProject();}catch(err){opOut(err.message)}});
@@ -2776,6 +2798,8 @@ async function buildAccumulatedContext(upToStepIdx){
   sections.push(`=== READING INSTRUCTIONS ===\nRead ALL documents below with equal attention and weight. Every document contains relevant information. Extract from ALL of them to produce your output. Do not skip any document.`);
   sections.push(`=== DEAL METADATA ===\n${dealCtx()}`);
   if(st.termsheetParsed?.source_excerpt) sections.push(`=== TERM SHEET ===\n${st.termsheetParsed.source_excerpt}`);
+
+
 
   async function readFile(f){
     const e=ext(f.name);
@@ -3086,7 +3110,7 @@ function renderHitlUploadPanel(){
   }
 })();
 
-// ── Updated reset — clears hitlUploads and generatedDocs (merged into reset() above) ──
+
 
 // ══════════════════════════════════════════════════════════════════════
 // STEP GENERATORS
@@ -3352,13 +3376,15 @@ async function generateTransmittalLetter(){
 // idx 13 — Analyze Redlines (Claude API, reads uploaded markup)
 async function generateRedlineAnalysis(){
   const m=st.termsheetParsed||{};
-  const markupFile=st.hitlUploads[12];
-  let markupText="No markup file uploaded.";
+  // Check both HITL gate upload AND step upload panel for the markup file
+  const markupFile=st.hitlUploads[12]||(st.stepUploads[12]&&st.stepUploads[12][0]);
+  let markupText="No counterparty markup file uploaded. Upload the redlined .docx via the Gate Requirement panel in Step 13.";
   if(markupFile){
     try{
       if(window.__pilotExtractFileText) markupText=await window.__pilotExtractFileText(markupFile);
+      else if(markupFile.name.endsWith(".pdf")) markupText=await extractPdfText(markupFile);
       else markupText=await markupFile.text();
-    }catch(_){}
+    }catch(err){ markupText=`[Could not read markup file: ${err.message}]`; }
   }
   const spaText=st.generatedDocs[8]?st.generatedDocs[8].text.slice(0,6000):"SPA not available.";
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
@@ -4070,7 +4096,7 @@ async function genStep10_PartnerReviewPack(ctx,m){
 
 async function genStep12_ReceiveMarkup(ctx,m){
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
-  const markupFile=st.hitlUploads[12];
+  const markupFile=st.hitlUploads[12]||(st.stepUploads[12]&&st.stepUploads[12][0]);
   const markupNote=markupFile?`Counterparty markup file uploaded: "${markupFile.name}" (${(markupFile.size/1024).toFixed(1)} KB)`:"No markup file uploaded yet — complete the human gate to upload counterparty markup.";
   await generateDocument({
     docIndex:12, title:"Counterparty Markup Receipt", filename:`counterparty_markup_receipt_${toSlug(m.codename||"deal")}`,
