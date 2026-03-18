@@ -1482,20 +1482,30 @@ function approve(i){
   if(i===24&&typeof generateCheckerOutput==="function"){
     generateCheckerOutput(i).catch(err=>log(`Final checker sign-off error: ${err.message}`));
   }
-  // Auto-run next step if uploads are already present for it
+  // Auto-run next step ONLY if it has absolutely no upload requirement
   const next=st.cursor;
   const nextRow=st.rows[next];
   if(nextRow&&nextRow.status==="pending"&&!nextRow.human&&!st.aiRunning){
     const block=checkUploadBlock(next);
     const cfg=STEP_UPLOAD_CONFIG[next];
     const uploads=st.stepUploads[next]||[];
-    const hasUploads=uploads.length>0||(st.stepSaved[next]>0)||(st.hitlUploads[next]);
-    const noUploadNeeded=!block&&(!cfg||!cfg.required||hasUploads);
-    if(noUploadNeeded){
-      log(`Auto-running Step ${next+1} — uploads already present.`);
+    const savedCount=st.stepSaved?.[next]||0;
+    const hasUploads=uploads.length>0||savedCount>0||!!st.hitlUploads[next];
+
+    // Only auto-run if: no hard block AND (no config, OR config is optional, OR uploads already present)
+    const uploadRequired=!!block||(cfg&&cfg.required&&!hasUploads);
+
+    if(!uploadRequired){
+      log(`Auto-running Step ${next+1} — no upload required.`);
       setTimeout(()=>{ runMaker(next); render(); },400);
     } else {
-      log(`Step ${next+1} ready — upload ${cfg?.label||"required document"} to continue.`);
+      // Stop and tell user exactly what to upload
+      const label=block?block.map(r=>r.label).join(", "):cfg?.label||"required document";
+      log(`⬆ Step ${next+1} ready — upload required before running: ${label}`);
+      opOut({ok:true,action:"upload-required-next-step",step:next+1,
+        message:`Upload required for Step ${next+1}: ${label}`,
+        instruction:"Upload the document in the Step Upload panel on the right, then click Run Maker."
+      });
       renderStepUploadPanel();
     }
   }
