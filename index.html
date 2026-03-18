@@ -371,6 +371,12 @@ h1 em{font-style:italic;color:var(--accent)}
     <strong>Execution Board</strong>
     <div class="legend"><span class="chip ai">AI-led</span><span class="chip human">Human gate</span></div>
   </div>
+  <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:200px;">
+    <div id="dealProgress" style="flex:1;height:6px;background:var(--line);border-radius:999px;overflow:hidden;min-width:80px;">
+      <div id="dealProgressBar" style="height:100%;width:0%;background:var(--accent2);border-radius:999px;transition:width .4s ease;"></div>
+    </div>
+    <span id="dealProgressLabel" style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;white-space:nowrap;flex-shrink:0;">0 / 25</span>
+  </div>
   <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted2);font-family:'IBM Plex Mono',monospace;flex-shrink:0;">
     <span id="timelineMeta"></span>
   </div>
@@ -1266,7 +1272,20 @@ function renderSteps(){el.steps.innerHTML="";st.rows.forEach((row,idx)=>{
   right.className="cell";
   right.innerHTML=`<div class="title"><strong>${row.human?"Human decision":row.checker}</strong></div><div class="agent">Capturing: ${row.capture.join(", ")}</div><div class="meta">${row.human?`<button class="tiny human" data-action="human" data-id="${idx}" ${isAiRunningHere?"disabled":""}>complete human gate</button>`:`<button class="tiny approve" data-action="approve" data-id="${idx}" ${isAiRunningHere?"disabled":""}>approve</button>`}</div><div class="agent">Maker output: ${row.makerOut.map(docName).join(", ")}</div><div class="agent">Checker output: ${row.checkerOut.map(docName).join(", ")}</div>`;
   wrap.appendChild(left);wrap.appendChild(right);el.steps.appendChild(wrap);
-})}function renderMetrics(){el.mCompleted.textContent=String(st.rows.filter(r=>r.status==="approved").length);el.mPending.textContent=String(st.rows.filter(r=>r.status==="pending").length);el.mHuman.textContent=String(st.rows.filter(r=>r.status==="awaiting_human").length);el.mLoops.textContent=String(st.loops)}
+})}function renderMetrics(){
+  const completed=st.rows.filter(r=>r.status==="approved").length;
+  const total=st.rows.length||25;
+  const pct=Math.round(completed/total*100);
+  el.mCompleted.textContent=String(completed);
+  el.mPending.textContent=String(st.rows.filter(r=>r.status==="pending").length);
+  el.mHuman.textContent=String(st.rows.filter(r=>r.status==="awaiting_human").length);
+  el.mLoops.textContent=String(st.loops);
+  // Update progress bar
+  const bar=document.getElementById("dealProgressBar");
+  const label=document.getElementById("dealProgressLabel");
+  if(bar) bar.style.width=pct+"%";
+  if(label) label.textContent=`${completed} / ${total} steps (${pct}%)`;
+}
 function renderPhases(){el.phases.innerHTML=PHASE.map(g=>{const rows=st.rows.filter(r=>r.group===g);const done=rows.filter(r=>r.status==="approved").length;const pct=rows.length?Math.round(done/rows.length*100):0;return`<div class="phase"><div class="r"><strong>${g}</strong><span>${done}/${rows.length}</span></div><div class="bar"><i style="width:${pct}%"></i></div></div>`}).join("")}
 function renderStepContext(){const row=st.rows[st.selected]||st.rows[st.cursor];if(!row){el.stepContext.innerHTML="";return}const req=row.required.length?row.required.map(k=>`<li>${docName(k)} ${hasDoc(k)?"(available)":"(missing)"}</li>`).join(""):"<li>None</li>";el.stepContext.innerHTML=`<div class="doc"><div class="n">${row.step}</div><div class="m">${row.human?"Human-in-the-loop gate":"AI-led step"} | Group: ${row.group}</div></div><div class="doc"><div class="n">Required Input Docs</div><ul class="list">${req}</ul></div><div class="doc"><div class="n">Process Fields Captured</div><ul class="list">${row.capture.map(x=>`<li>${x}</li>`).join("")}</ul></div><div class="doc"><div class="n">Maker Docs Produced</div><ul class="list">${row.makerOut.map(x=>`<li>${docName(x)}</li>`).join("")}</ul></div><div class="doc"><div class="n">Checker/Human Docs Produced</div><ul class="list">${row.checkerOut.map(x=>`<li>${docName(x)}</li>`).join("")}</ul></div>`}
 function renderDocs(){const keys=Object.keys(st.docs);if(!keys.length){el.docs.innerHTML='<div class="doc"><div class="n">No documents yet</div><div class="m">Run steps to build context.</div></div>';return}keys.sort((a,b)=>st.docs[b].versions.length-st.docs[a].versions.length);el.docs.innerHTML=keys.map(k=>{const d=st.docs[k];const last=d.versions[d.versions.length-1];return`<div class="doc"><div class="n">${d.name}</div><div class="m">v${last.version} | ${last.stage} | ${last.group}</div><div class="m">from: ${last.step}</div><div class="m">context: ${last.context}</div></div>`}).join("")}
@@ -1448,12 +1467,37 @@ function runMaker(i){const row=st.rows[i];if(!row||row.status==="approved")retur
 // All steps trigger AI generation
 if(typeof triggerStepGenerator==="function"){triggerStepGenerator(i).catch(err=>{log(`Generator error at step ${i+1}: ${err.message}`);});}
 return true}
-function approve(i){const row=st.rows[i];if(!row||!row.makerDone||row.human)return;row.status="approved";row.checkerDone=true;row.checkerOut.forEach(k=>addDoc(k,"checker",row,"approved"));log(`${row.checker} approved "${row.step}" and produced ${row.checkerOut.map(docName).join(", ")}.`);st.waitingHuman=false;
-// Advance to next step now that user has approved
-advance();
-render();
-// Final checker sign-off only at last step
-if(i===24&&typeof generateCheckerOutput==="function"){generateCheckerOutput(i).catch(err=>log(`Final checker sign-off error: ${err.message}`));}
+function approve(i){
+  const row=st.rows[i];
+  if(!row||!row.makerDone||row.human) return;
+  row.status="approved";
+  row.checkerDone=true;
+  row.checkerOut.forEach(k=>addDoc(k,"checker",row,"approved"));
+  log(`${row.checker} approved "${row.step}" and produced ${row.checkerOut.map(docName).join(", ")}.`);
+  st.waitingHuman=false;
+  advance();
+  render();
+  // Final checker sign-off only at last step
+  if(i===24&&typeof generateCheckerOutput==="function"){
+    generateCheckerOutput(i).catch(err=>log(`Final checker sign-off error: ${err.message}`));
+  }
+  // Auto-run next step if uploads are already present for it
+  const next=st.cursor;
+  const nextRow=st.rows[next];
+  if(nextRow&&nextRow.status==="pending"&&!nextRow.human&&!st.aiRunning){
+    const block=checkUploadBlock(next);
+    const cfg=STEP_UPLOAD_CONFIG[next];
+    const uploads=st.stepUploads[next]||[];
+    const hasUploads=uploads.length>0||(st.stepSaved[next]>0)||(st.hitlUploads[next]);
+    const noUploadNeeded=!block&&(!cfg||!cfg.required||hasUploads);
+    if(noUploadNeeded){
+      log(`Auto-running Step ${next+1} — uploads already present.`);
+      setTimeout(()=>{ runMaker(next); render(); },400);
+    } else {
+      log(`Step ${next+1} ready — upload ${cfg?.label||"required document"} to continue.`);
+      renderStepUploadPanel();
+    }
+  }
 }
 function reject(i){const row=st.rows[i];if(!row||!row.makerDone||row.human)return;row.status="rejected";row.checkerDone=false;st.loops+=1;const anchor=LOOP[row.group]??i;for(let x=anchor;x<=i;x+=1){st.rows[x].status="pending";st.rows[x].makerDone=false;st.rows[x].checkerDone=false}st.cursor=anchor;st.selected=anchor;log(`${row.checker} rejected "${row.step}". Loopback to step ${anchor+1}.`) }
 function completeHuman(i){const row=st.rows[i];if(!row||!row.human||!row.makerDone)return;if(row.hitlUpload&&!st.hitlUploads[i]){log(`Step ${i+1} gate locked: upload "${row.hitlUploadLabel}" first.`);opOut({ok:false,action:"gate-locked",step:i+1,message:`Upload required: ${row.hitlUploadLabel}`});return;}row.status="approved";row.checkerDone=true;row.checkerOut.forEach(k=>addDoc(k,"human",row,"decision-recorded"));st.waitingHuman=false;log(`Human gate completed for "${row.step}". Output: ${row.checkerOut.map(docName).join(", ")}.`);
@@ -1509,29 +1553,74 @@ async function runUntilHuman(){
   }
   st.running=true;
   render();
+
   while(st.rows.some(r=>r.status!=="approved")){
     syncWaitingHumanState();
     if(st.waitingHuman) break;
+    if(st.aiRunning) break; // generation in progress — let it finish
+
     const row=st.rows[st.cursor];
     if(!row) break;
+    if(row.status==="approved"){ advance(); continue; }
+
+    // Check if this step needs uploads that aren't there yet
+    const block=checkUploadBlock(st.cursor);
+    const cfg=STEP_UPLOAD_CONFIG[st.cursor];
+    const stepUploads=st.stepUploads[st.cursor]||[];
+    const hitlFile=st.hitlUploads[st.cursor];
+
+    if(block&&block.length){
+      // Hard upload block — stop and tell user exactly what's needed
+      const labels=block.map(r=>r.label).join(", ");
+      log(`⛔ Paused at Step ${st.cursor+1}: upload required before AI can run — ${labels}`);
+      opOut({ok:false,action:"upload-required-before-run",step:st.cursor+1,
+        message:`Upload required for Step ${st.cursor+1}: ${labels}`,
+        instruction:`Upload the required documents in the Step Upload panel on the right, then click Run Until Human Gate again.`
+      });
+      st.running=false;
+      render();
+      return;
+    }
+
+    if(cfg&&cfg.required&&!stepUploads.length&&!hitlFile){
+      log(`⛔ Paused at Step ${st.cursor+1}: upload "${cfg.label}" first`);
+      opOut({ok:false,action:"upload-required-before-run",step:st.cursor+1,
+        message:`Step ${st.cursor+1} requires: ${cfg.label}`,
+        instruction:`Upload the document in the Step Upload panel, then click Run Until Human Gate again.`
+      });
+      st.running=false;
+      render();
+      return;
+    }
+
     const made=runMaker(st.cursor);
     if(!made) break;
-    await sleep(150);
+
+    // Wait for AI generation to complete (triggerStepGenerator runs async)
+    await sleep(200);
+    let waitCount=0;
+    while(st.aiRunning&&waitCount<600){ // max 5 min wait
+      await sleep(500);
+      waitCount++;
+    }
+
     if(row.human){
-      log("Paused at mandatory human gate.");
+      log("Paused at mandatory human gate — complete the human gate to continue.");
       break;
     }
-    if(st.forcedReject){
-      st.forcedReject=false;
-      reject(st.cursor);
-    }else{
+
+    // Auto-approve AI steps after generation completes
+    if(row.status!=="approved"&&row.makerDone){
       approve(st.cursor);
+      await sleep(200);
     }
+
     await sleep(100);
   }
+
   st.running=false;
   syncWaitingHumanState();
-  if(st.rows.every(r=>r.status==="approved")) log("Workflow fully completed.");
+  if(st.rows.every(r=>r.status==="approved")) log("✓ Workflow fully completed!");
   render();
 }
 
@@ -3186,7 +3275,7 @@ async function generateSPA(){
 
   const full=header+sectionTexts.join("\n\n---\n\n");
 
-  saveGeneratedDoc(8,`SPA Draft — ${m.buyer||"Buyer"} / ${m.target||"Target"}`,full,`spa_draft_${toSlug(m.codename||"deal")}`);
+  saveGeneratedDoc(8,`SPA Draft v1 — ${m.buyer||"Buyer"} / ${m.target||"Target"}`,full,`spa_draft_v1_${toSlug(m.codename||"deal")}`);
   setAiDocGenerating(null);
   opOut({ok:true,action:"spa-generated",step:9,sections:total,buyer:m.buyer,target:m.target});
   log(`SPA draft complete — ${total} sections generated.`);
@@ -3234,7 +3323,7 @@ async function generateAncillaries(){
 
   const header=`# Ancillary Agreements Package — DRAFT\n\n**Transaction:** ${m.buyer||"Buyer"} acquisition of ${m.target||"Target"}\n**Date:** ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"})}\n**PRIVILEGED & CONFIDENTIAL — WORKING DRAFT**\n\nContents: (1) Disclosure Letter, (2) Transitional Services Agreement, (3) Management Warranty Deed\n\n---\n\n`;
   const full=header+sectionTexts.join("\n\n---\n\n");
-  saveGeneratedDoc(9,"Ancillary Agreements Package",full,`ancillary_pack_${toSlug(m.codename||"deal")}`);
+  saveGeneratedDoc(9,`Ancillary Pack v1 — ${m.buyer||"Buyer"} / ${m.target||"Target"}`,full,`ancillary_pack_v1_${toSlug(m.codename||"deal")}`);
   setAiDocGenerating(null);
   opOut({ok:true,action:"ancillaries-generated",step:10,documents:ancillaries.map(a=>a.label)});
   log(`Ancillary agreements complete — ${ancillaries.length} documents generated.`);
@@ -3294,7 +3383,7 @@ async function generateSpecialistNotes(){
   const redlineDoc=st.generatedDocs[13]?st.generatedDocs[13].text.slice(0,5000):"No redline analysis.";
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
   await generateDocument({
-    docIndex:14, title:"Specialist Consolidated Notes", filename:`specialist_notes_${toSlug(m.codename||"deal")}`,
+    docIndex:14, title:"Specialist Opinion Set", filename:`specialist_notes_${toSlug(m.codename||"deal")}`,
     header:`# Specialist Input — Consolidated Notes\n\n**Transaction:** ${m.buyer||"[Buyer]"} / ${m.target||"[Target]"}\n**Date:** ${date}\n**PRIVILEGED & CONFIDENTIAL**`,
     system:`You are a specialist M&A advisor with deep expertise across tax, regulatory, and employment law. Produce deal-specific specialist notes.`,
     sections:[
@@ -3437,7 +3526,7 @@ ${docList}
 ---
 
 *Closing set prepared by Closing Set Maker. All documents subject to final review.*`;
-  saveGeneratedDoc(20,"Closing Binder Index",text,`closing_binder_${toSlug(m.codename||"deal")}`);
+  saveGeneratedDoc(20,`Closing Binder Draft — ${m.buyer||"Buyer"} / ${m.target||"Target"}`,text,`closing_binder_draft_${toSlug(m.codename||"deal")}`);
   opOut({ok:true,action:"closing-set-generated",step:21,docs_indexed:docs.length});
   log(`Closing set generated — ${docs.length} documents indexed.`);
 }
@@ -3633,7 +3722,7 @@ Please address any queries to [Contact Name] at [Email / Address].
 ---
 
 *Post-closing filings checklist prepared by Filing Maker. All deadlines subject to confirmation by specialist counsel.*`;
-  saveGeneratedDoc(24,"Post-Closing Filings Checklist",text,`post_closing_filings_${toSlug(m.codename||"deal")}`);
+  saveGeneratedDoc(24,`Post-Closing Filings — ${m.buyer||"Buyer"} / ${m.target||"Target"}`,text,`post_closing_filings_${toSlug(m.codename||"deal")}`);
   opOut({ok:true,action:"filings-checklist-generated",step:25,jurisdiction:jur});
   log("Post-closing filings checklist generated.");
 }
@@ -3824,18 +3913,72 @@ async function genStep1_DDRequest(ctx,m){
 
 async function genStep2_Ingest(ctx,m){
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
-  await generateDocument({
-    docIndex:2, title:"Data Room Ingestion Summary", filename:`data_room_summary_${toSlug(m.codename||"deal")}`,
-    header:`# Data Room Ingestion Summary\n\n**Transaction:** ${m.buyer||"[Buyer]"} / ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — Covers: Cap Table · Material Contracts · IP Schedule · Employment Agreements**`,
-    system:`You are a senior M&A lawyer ingesting and summarising all uploaded data room documents. Extract and consolidate key information from each document category. Be thorough and deal-specific.`,
-    sections:[
-      {label:"Part 1 — Cap Table & Corporate Documents Summary",
-       prompt:`Extract and summarise the CAPITALISATION TABLE and CORPORATE DOCUMENTS from the uploaded data room.\n\n${ctx.slice(0,14000)}\n\nCAP TABLE SUMMARY: extract exact share counts, option pool, warrant coverage, fully-diluted capitalisation, major shareholders and ownership %, any convertible instruments. Present as a structured table.\n\nCORPORATE DOCUMENTS SUMMARY: key findings from charter/articles, bylaws, board minutes, shareholder agreements — governance structure, board composition, approval thresholds, any unusual provisions.\n\nIP SCHEDULE: list all intellectual property identified — patents, trademarks, software, key licences, open source usage.\n\nDOCUMENT RECEIPT LOG: table of all documents received — Document | Category | Key Figures | Notable Terms | Status`},
-      {label:"Part 2 — Material Contracts & Employment Agreements Summary",
-       prompt:`Continue the Data Room Ingestion Summary for: ${m.buyer||"Buyer"} / ${m.target||"Target"}\n\nContext: ${ctx.slice(0,12000)}\n\nMATERIAL CONTRACTS SUMMARY: for each commercial contract uploaded — party names, contract type, key commercial terms, duration, change-of-control clause (yes/no), consent requirement (yes/no), termination rights, value/revenue.\n\nEMPLOYMENT AGREEMENTS SUMMARY: for each employment agreement — employee name, role, salary, notice period, change-of-control payment, non-compete terms, equity/options.\n\nCOVERAGE GAPS: what was expected vs what was received\n\nINITIAL RISK FLAGS: top risks identified across all documents\n\nINGESTION STATUS: Approved / Approved with Gaps / Insufficient`}
-    ]
-  });
-  opOut({ok:true,action:"ingestion-qc-generated",step:3});
+  const slug=toSlug(m.codename||"deal");
+  const system=`You are a senior M&A lawyer extracting and structuring data room documents. Be thorough, precise, and deal-specific. Use tables wherever possible. Output ONLY the document content — no preamble.`;
+
+  // ── Document 1: Target Cap Table ────────────────────────────────────
+  setAiDocGenerating("Step 3 — Generating Target Cap Table (1/4)…");
+  log("Step 3 (1/4): Generating Target Cap Table…");
+  const capTableText=await callClaudeAPI(system,
+    `Extract and structure the CAPITALISATION TABLE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Target Cap Table document containing:\n1. SHARE CAPITAL STRUCTURE: table of all share classes — Class | Authorised | Issued | Par Value | Rights\n2. SHAREHOLDER REGISTER: table of all shareholders — Shareholder | Share Class | Shares Held | % Ownership (undiluted) | % Ownership (fully diluted)\n3. OPTION & WARRANT SCHEDULE: all outstanding options/warrants — Holder | Grant Date | Vesting Schedule | Strike Price | Shares | Status\n4. CONVERTIBLE INSTRUMENTS: any convertible notes, SAFEs, or other instruments — Holder | Principal | Conversion Terms | Dilutive Impact\n5. FULLY-DILUTED CAPITALISATION TABLE: complete table showing ownership on a fully-diluted basis\n6. KEY OBSERVATIONS: any unusual cap table features, drag-along/tag-along rights, pre-emption rights, or consent requirements\n\nBase all figures directly on the uploaded documents.`,
+    8000
+  ).catch(err=>`[Cap Table generation failed: ${err.message}]`);
+
+  const capTableFull=`# Target Cap Table\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${capTableText}`;
+  await autoDownloadDoc(capTableFull,`cap_table_${slug}`,"Target Cap Table");
+  if(st.projectDirHandle) writeText(st.projectDirHandle,`outputs/maker/cap_table_${slug}.md`,capTableFull).catch(()=>{});
+  log("Downloaded: Target Cap Table.docx");
+  await new Promise(r=>setTimeout(r,400));
+
+  // ── Document 2: Material Contracts Summary ───────────────────────────
+  setAiDocGenerating("Step 3 — Generating Material Contracts Summary (2/4)…");
+  log("Step 3 (2/4): Generating Material Contracts Summary…");
+  const contractsText=await callClaudeAPI(system,
+    `Extract and structure the MATERIAL CONTRACTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Material Contracts Summary containing:\n1. CONTRACTS SUMMARY TABLE: for each contract — Contract Name | Counterparty | Type | Effective Date | Expiry | Value/Revenue | Renewal | Change of Control Clause (Y/N) | Consent Required (Y/N) | Termination Rights\n2. CHANGE OF CONTROL ANALYSIS: for each contract with a change of control clause — exact clause text/summary, trigger conditions, consequences (termination right / consent / deemed assignment), recommended action\n3. CONSENT REQUIREMENTS MATRIX: all contracts requiring third-party consent to proceed — Contract | Consent Party | Consent Type | Timing | Priority\n4. TERMINATION RISK REGISTER: contracts with termination rights that could be triggered — Contract | Trigger | Risk Level | Mitigation\n5. KEY COMMERCIAL OBSERVATIONS: top 5 commercial risks or opportunities from the contract review\n\nBase all analysis directly on the uploaded documents.`,
+    8000
+  ).catch(err=>`[Material Contracts generation failed: ${err.message}]`);
+
+  const contractsFull=`# Material Contracts Summary\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${contractsText}`;
+  await autoDownloadDoc(contractsFull,`material_contracts_${slug}`,"Material Contracts Summary");
+  if(st.projectDirHandle) writeText(st.projectDirHandle,`outputs/maker/material_contracts_${slug}.md`,contractsFull).catch(()=>{});
+  log("Downloaded: Material Contracts Summary.docx");
+  await new Promise(r=>setTimeout(r,400));
+
+  // ── Document 3: IP Schedule ──────────────────────────────────────────
+  setAiDocGenerating("Step 3 — Generating IP Schedule (3/4)…");
+  log("Step 3 (3/4): Generating IP Schedule…");
+  const ipText=await callClaudeAPI(system,
+    `Extract and structure the INTELLECTUAL PROPERTY SCHEDULE from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured IP Schedule containing:\n1. OWNED IP REGISTER: all IP owned by the target — IP Type | Description | Registration # | Jurisdiction | Status | Expiry | Owner of Record\n2. LICENSED-IN IP: IP licensed to the target — Licensor | IP Description | Licence Type | Scope | Duration | Royalty | Exclusivity | Termination Rights\n3. LICENSED-OUT IP: IP licensed by the target to third parties — Licensee | IP Description | Scope | Revenue | Exclusivity\n4. SOFTWARE & TECHNOLOGY: key software systems, proprietary technology, and open source components\n5. DOMAIN NAMES & TRADE MARKS: key brands, domain names, and registered marks\n6. IP RISK ASSESSMENT: any ownership disputes, encumbrances, expiring registrations, or open source licence compliance issues\n7. KEY OBSERVATIONS: IP gaps or risks relevant to the transaction\n\nBase all analysis on the uploaded documents. If limited IP information was provided, note the gaps.`,
+    8000
+  ).catch(err=>`[IP Schedule generation failed: ${err.message}]`);
+
+  const ipFull=`# IP Schedule\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${ipText}`;
+  await autoDownloadDoc(ipFull,`ip_schedule_${slug}`,"IP Schedule");
+  if(st.projectDirHandle) writeText(st.projectDirHandle,`outputs/maker/ip_schedule_${slug}.md`,ipFull).catch(()=>{});
+  log("Downloaded: IP Schedule.docx");
+  await new Promise(r=>setTimeout(r,400));
+
+  // ── Document 4: Employment Agreements Summary ────────────────────────
+  setAiDocGenerating("Step 3 — Generating Employment Agreements Summary (4/4)…");
+  log("Step 3 (4/4): Generating Employment Agreements Summary…");
+  const employmentText=await callClaudeAPI(system,
+    `Extract and structure the EMPLOYMENT AGREEMENTS from the uploaded data room documents.\n\n${ctx.slice(0,12000)}\n\nProduce a structured Employment Agreements Summary containing:\n1. KEY PERSONNEL SUMMARY TABLE: for each employment agreement — Employee | Role | Start Date | Notice Period (employee) | Notice Period (employer) | Base Salary | Bonus | Equity/Options | Garden Leave\n2. CHANGE OF CONTROL PROVISIONS: for each employee — Cash Payment on CoC | Acceleration of Equity | Good Reason Triggers | Effective Date | Estimated CoC Payment Value\n3. NON-COMPETE & NON-SOLICIT SUMMARY: — Employee | Non-Compete Duration | Non-Compete Geography | Non-Solicit Duration | Enforceability Assessment\n4. IP ASSIGNMENT & CONFIDENTIALITY: any unusual IP assignment terms or gaps in confidentiality coverage\n5. RETENTION RISK ASSESSMENT: key personnel at risk of departure post-transaction, with recommended retention approach\n6. TOTAL CHANGE OF CONTROL COST ESTIMATE: aggregate estimated cost of all change of control payments\n\nBase all analysis directly on the uploaded employment agreement documents.`,
+    8000
+  ).catch(err=>`[Employment Agreements generation failed: ${err.message}]`);
+
+  const employmentFull=`# Employment Agreements Summary\n\n**Transaction:** ${m.buyer||"[Buyer]"} acquisition of ${m.target||"[Target]"}\n**Date:** ${date}\n**CONFIDENTIAL — PRIVILEGED**\n\n---\n\n${employmentText}`;
+  await autoDownloadDoc(employmentFull,`employment_agreements_${slug}`,"Employment Agreements Summary");
+  if(st.projectDirHandle) writeText(st.projectDirHandle,`outputs/maker/employment_agreements_${slug}.md`,employmentFull).catch(()=>{});
+  log("Downloaded: Employment Agreements Summary.docx");
+
+  // Save combined summary to st.generatedDocs[2] for downstream context
+  const combinedSummary=`# Data Room Ingestion — Combined Summary\n\nTransaction: ${m.buyer||"Buyer"} / ${m.target||"Target"} | Date: ${date}\n\n4 documents generated and downloaded:\n1. Target Cap Table\n2. Material Contracts Summary\n3. IP Schedule\n4. Employment Agreements Summary\n\n---\n\nCAP TABLE HIGHLIGHTS:\n${capTableText.slice(0,1500)}\n\n---\n\nMATERIAL CONTRACTS HIGHLIGHTS:\n${contractsText.slice(0,1500)}\n\n---\n\nIP HIGHLIGHTS:\n${ipText.slice(0,800)}\n\n---\n\nEMPLOYMENT HIGHLIGHTS:\n${employmentText.slice(0,800)}`;
+
+  st.generatedDocs[2]={title:"Data Room Ingestion (4 docs)",text:combinedSummary,filename:`data_room_ingestion_${slug}`,generated_at:new Date().toISOString()};
+  if(st.projectDirHandle) writeText(st.projectDirHandle,`outputs/maker/data_room_ingestion_${slug}.md`,combinedSummary).catch(()=>{});
+  setAiDocGenerating(null);
+  opOut({ok:true,action:"data-room-ingestion-complete",step:3,documents:["Target Cap Table","Material Contracts Summary","IP Schedule","Employment Agreements Summary"]});
+  log("Step 3 complete — 4 documents generated and downloaded.");
 }
 
 async function genStep3_ContractReview(ctx,m){
@@ -3873,7 +4016,7 @@ async function genStep5_DDMemo(ctx,m){
   const generatedAt=new Date().toISOString();
   const downloadName=`${toSlug(m.codename||"project")}_dd_memo.docx`;
   await generateDocument({
-    docIndex:5, title:"DD Memorandum", filename:`dd_memo_${toSlug(m.codename||"deal")}`,
+    docIndex:5, title:"DD Memo Draft", filename:`dd_memo_draft_${toSlug(m.codename||"deal")}`,
     header:`# CONFIDENTIAL — Due Diligence Memorandum\n\n**Buyer:** ${m.buyer||"[Buyer]"} | **Target:** ${m.target||"[Target]"} | **Type:** ${m.deal_type||"M&A"}\n**Date:** ${date}\n**PRIVILEGED & CONFIDENTIAL — NOT FOR DISTRIBUTION**`,
     system:`You are a senior M&A partner drafting a comprehensive due diligence memorandum to present to the client. Every finding must reference specific documents and specific clauses or figures from the uploaded materials.`,
     sections:[
@@ -3961,7 +4104,7 @@ async function genStep15_ClientOptionsPrep(ctx,m){
 async function genStep17_NegotiationPrep(ctx,m){
   const date=new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"});
   await generateDocument({
-    docIndex:17, title:"Negotiation Call Pack", filename:`negotiation_call_pack_${toSlug(m.codename||"deal")}`,
+    docIndex:17, title:"Live Negotiation Log", filename:`negotiation_log_${toSlug(m.codename||"deal")}`,
     header:`# Negotiation Call Support Pack\n\n**Transaction:** ${m.buyer||"[Buyer]"} / ${m.target||"[Target]"}\n**Date:** ${date}\n**PRIVILEGED — ATTORNEY WORK PRODUCT**`,
     system:`You are an M&A partner preparing for a live negotiation call. Be tactical and specific.`,
     sections:[
